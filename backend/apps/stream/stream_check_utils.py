@@ -70,6 +70,9 @@ _LOOP_PROBE_HAMMING_TOLERANCE = 3
 _LOOP_PROBE_DURATION          = 360   # 6 minutes — catches loops up to 3 min period
 _LOOP_PROBE_DURATION_MIN      = 60    # enforced floor
 _LOOP_PROBE_DURATION_MAX      = 720   # 12 minutes — ceiling for future flexibility
+_LOOP_PROBE_STALL_SECONDS     = 15.0  # decoded video must keep advancing
+_LOOP_PROBE_MIN_STALL_FRAMES  = 10    # ignore slow startup before enough evidence
+_LOOP_PROBE_TERMINATE_GRACE_SECONDS = 2.0
 
 # Constants for error detection and logging
 FFMPEG_HWACCEL_MODES = {
@@ -2579,6 +2582,7 @@ def _probe_stream_for_loops(
 
     detector      = SidecarLoopDetector(proc.stdout, stream_id=None)
     frames_done   = [0]
+    last_frame_at = [None]
     loop_detected = False
     loop_duration = None
 
@@ -2595,6 +2599,7 @@ def _probe_stream_for_loops(
 
                 wall_time = time.monotonic()
                 detector.last_frame_time = wall_time
+                last_frame_at[0] = wall_time
                 # FFmpeg already emits one frame per media second via fps=1.
                 # Dispatcharr may deliver buffered media faster than wall clock,
                 # so a second wall-time throttle would discard valid samples.
@@ -2660,6 +2665,7 @@ def _probe_stream_for_loops(
     reader.start()
 
     abort_watcher_stop = threading.Event()
+    probe_aborted = threading.Event()
     abort_watcher_thread: Optional[threading.Thread] = None
 
     if callable(should_abort):
@@ -2672,6 +2678,7 @@ def _probe_stream_for_loops(
                     logger.warning(f"[loop-probe:{stream_tag}] Abort callback failed: {abort_exc}")
                     return
                 logger.info(f"[loop-probe:{stream_tag}] Abort requested; terminating probe")
+                probe_aborted.set()
                 try:
                     proc.terminate()
                 except Exception as terminate_exc:
@@ -2692,10 +2699,66 @@ def _probe_stream_for_loops(
         try:
             if should_abort():
                 logger.info(f"[loop-probe:{stream_tag}] Abort requested before wait; terminating probe")
+                probe_aborted.set()
                 proc.terminate()
         except Exception as abort_exc:
             logger.warning(f"[loop-probe:{stream_tag}] Abort callback failed: {abort_exc}")
             should_abort = None
+
+    # Some broken MPEG-TS/AceStream sources keep the HTTP connection open while
+    # replaying unusable packets or resetting timestamps. FFmpeg then emits a
+    # short initial run of frames and waits forever, so the visual matcher never
+    # receives the repeated pictures and used to report a false clean result.
+    # Treat sustained loss of decoded-video progress as loop evidence once the
+    # probe has enough frames to rule out ordinary startup latency.
+    stall_watcher_stop = threading.Event()
+    probe_stalled = threading.Event()
+
+    def _stall_watcher() -> None:
+        while not stall_watcher_stop.wait(0.5):
+            last_progress = last_frame_at[0]
+            if last_progress is None or frames_done[0] < _LOOP_PROBE_MIN_STALL_FRAMES:
+                continue
+            if time.monotonic() - last_progress < _LOOP_PROBE_STALL_SECONDS:
+                continue
+            probe_stalled.set()
+            logger.warning(
+                f"[loop-probe:{stream_tag}] Decoded video stalled for "
+                f"{_LOOP_PROBE_STALL_SECONDS:.0f}s after {frames_done[0]} frames; "
+                "treating as a loop/timestamp-reset stream"
+            )
+            try:
+                proc.terminate()
+            except Exception as terminate_exc:
+                logger.warning(f"[loop-probe:{stream_tag}] Stall terminate failed: {terminate_exc}")
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                return
+
+            # A network-blocked FFmpeg may ignore SIGTERM while waiting for
+            # more HTTP bytes. Do not retain the probe slot until the much
+            # larger overall timeout when the stall is already conclusive.
+            if not stall_watcher_stop.wait(_LOOP_PROBE_TERMINATE_GRACE_SECONDS):
+                try:
+                    if proc.poll() is None:
+                        logger.warning(
+                            f"[loop-probe:{stream_tag}] FFmpeg ignored terminate after stall; killing"
+                        )
+                        proc.kill()
+                except AttributeError:
+                    proc.kill()
+                except Exception as kill_exc:
+                    logger.warning(f"[loop-probe:{stream_tag}] Stall kill failed: {kill_exc}")
+            return
+
+    stall_watcher_thread = threading.Thread(
+        target=_stall_watcher,
+        daemon=True,
+        name=f"LoopProbe-StallWatcher[{stream_tag}]",
+    )
+    stall_watcher_thread.start()
 
     # Wait for FFmpeg; hard-kill if it overshoots
     try:
@@ -2708,14 +2771,22 @@ def _probe_stream_for_loops(
         proc.wait()
 
     abort_watcher_stop.set()
+    stall_watcher_stop.set()
     if abort_watcher_thread is not None:
         abort_watcher_thread.join(timeout=1)
+    stall_watcher_thread.join(timeout=1)
 
     detector.is_closed = True
     reader.join(timeout=10)
     stderr_reader.join(timeout=2)
 
     n = frames_done[0]
+
+    if probe_stalled.is_set() and not probe_aborted.is_set() and not loop_detected:
+        loop_detected = True
+        # At 1 sampled frame per media second, the decoded prefix is the best
+        # available estimate of the replay/timestamp-reset window.
+        loop_duration = max(10.0, float(n))
 
     stderr_bytes = (
         bytes(stderr_prefix) + b'\n' + bytes(stderr_tail)
@@ -2746,10 +2817,16 @@ def _probe_stream_for_loops(
         if stderr_out:
             logger.warning(f"[loop-probe:{stream_tag}] FFmpeg said: {scrub_urls(stderr_out[:300])}")
     elif loop_detected:
-        logger.warning(
-            f"[loop-probe:{stream_tag}] LOOP DETECTED — "
-            f"period~{loop_duration:.1f}s  frames={n}"
-        )
+        if probe_stalled.is_set():
+            logger.warning(
+                f"[loop-probe:{stream_tag}] LOOP/STALL DETECTED — "
+                f"decoded_window~{loop_duration:.1f}s  frames={n}"
+            )
+        else:
+            logger.warning(
+                f"[loop-probe:{stream_tag}] LOOP DETECTED — "
+                f"period~{loop_duration:.1f}s  frames={n}"
+            )
     else:
         logger.info(
             f"[loop-probe:{stream_tag}] Clean — no loop detected  frames={n}"

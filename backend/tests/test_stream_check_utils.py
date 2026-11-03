@@ -287,6 +287,55 @@ class TestLoopProbeSampling(unittest.TestCase):
         self.assertEqual(loop_duration, 12.0)
         self.assertEqual(frames_processed, len(raw_frames))
 
+    def test_loop_probe_marks_open_connection_with_stalled_video_as_loop(self):
+        """A TS source that stops decoding must not be reported as clean."""
+        raw_frames = [self._ppm_frame(index) for index in range(27)]
+
+        class StalledProcess:
+            def __init__(self, payload):
+                self.stdout = io.BytesIO(payload)
+                self.stderr = io.BytesIO(b"")
+                self.finished = threading.Event()
+                self.terminate_called = False
+                self.killed = False
+
+            def wait(self, timeout=None):
+                if not self.finished.wait(2):
+                    raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=timeout)
+                return 0
+
+            def terminate(self):
+                self.terminate_called = True
+
+            def poll(self):
+                return 0 if self.finished.is_set() else None
+
+            def kill(self):
+                self.killed = True
+                self.finished.set()
+
+        process = StalledProcess(b"".join(raw_frames))
+        with patch.object(
+            stream_check_utils.subprocess,
+            "Popen",
+            return_value=process,
+        ), patch.object(
+            stream_check_utils, "_LOOP_PROBE_STALL_SECONDS", 0.05
+        ), patch.object(
+            stream_check_utils, "_LOOP_PROBE_TERMINATE_GRACE_SECONDS", 0.05
+        ):
+            loop_detected, loop_duration, frames_processed = _probe_stream_for_loops(
+                url="http://example.invalid/stalled-loop.ts",
+                stream_tag="test-stalled-loop",
+                probe_duration=60,
+            )
+
+        self.assertTrue(process.terminate_called)
+        self.assertTrue(process.killed)
+        self.assertTrue(loop_detected)
+        self.assertEqual(loop_duration, 27.0)
+        self.assertEqual(frames_processed, 27)
+
 
 class TestGetStreamInfo(unittest.TestCase):
     """Test extracting stream information with ffprobe."""
