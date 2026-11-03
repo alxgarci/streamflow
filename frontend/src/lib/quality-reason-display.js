@@ -1,5 +1,6 @@
 const REASON_LABELS = {
   probe_exited_early: 'Probe exited early',
+  stalled_video: 'Decoded video stalled',
   blank_detected: 'Blank video detected',
   freeze_detected: 'Frozen video detected',
   zero_resolution: 'No video resolution',
@@ -69,6 +70,7 @@ const STATIC_REASON_DETAILS = {
   provider_capacity: 'No provider or profile check slot is free',
   provider_capacity_unavailable: 'No provider or profile check slot is free',
   provider_wait_timeout: 'No provider or profile slot became free in time',
+  stalled_video: 'FFmpeg stopped producing decoded frames after startup',
 }
 
 const formatNumber = (value, suffix = '') => {
@@ -245,6 +247,12 @@ export function getQualityReasonDisplay(stream = {}) {
     const ratio = formatNumber(context.freeze_ratio)
     const duration = formatNumber(context.freeze_duration_secs, 's')
     detail = [ratio ? `ratio ${ratio}` : null, duration].filter(Boolean).join(', ') || null
+  } else if (code === 'stalled_video') {
+    const frames = formatNumber(context.decoded_frames_before_stall)
+    const elapsed = formatNumber(context.probe_elapsed_seconds, 's')
+    detail = context.detection_reason === 'no_decoded_frames'
+      ? `no decoded frames within ${elapsed || 'the startup window'}`
+      : `stopped after ${frames || 'some'} decoded samples${elapsed ? ` (${elapsed})` : ''}`
   } else if (code === 'probe_exited_early') {
     const actual = formatNumber(context.actual_seconds, 's')
     const expected = formatNumber(context.expected_seconds, 's')

@@ -64,6 +64,7 @@ def create_bitrate_progress(
             freeze_check_enabled=False,
             hardware_acceleration=analysis_params.get('hardware_acceleration'),
             defer_missing_bitrate_retry=False,
+            _skip_stalled_video_probe=True,
         )
         return recheck_results[0] if recheck_results else None
 

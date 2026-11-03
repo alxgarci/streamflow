@@ -1155,14 +1155,14 @@ export default function StreamChecker() {
                       <Input
                         id="ffmpeg_duration"
                         type="number"
-                        value={editedConfig?.stream_analysis?.ffmpeg_duration || 30}
+                        value={editedConfig?.stream_analysis?.ffmpeg_duration ?? 30}
                         onChange={(e) => updateConfigValue('stream_analysis.ffmpeg_duration', parseInt(e.target.value))}
                         disabled={!configEditing}
                         min={5}
                         max={120}
                       />
                       <p className="text-xs text-muted-foreground">
-                        Basis analysis duration (5-120 seconds). Blank/freeze profiles use a separate visual probe that is automatically extended to at least the detector threshold plus 1 second; Changelog shows its effective duration and completion state.
+                        Basis analysis duration (5-120 seconds). Stalled Video Detection requires at least 40 seconds and raises this value automatically when enabled. Blank/freeze profiles use a separate visual probe that is automatically extended to at least the detector threshold plus 1 second.
                       </p>
                     </div>
 
@@ -1241,6 +1241,27 @@ export default function StreamChecker() {
                         id="bitrate_recheck_enabled"
                         checked={editedConfig?.stream_analysis?.bitrate_recheck_enabled !== false}
                         onCheckedChange={(checked) => updateConfigValue('stream_analysis.bitrate_recheck_enabled', checked)}
+                        disabled={!configEditing}
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
+                      <div className="space-y-0.5">
+                        <Label htmlFor="stalled_video_check_enabled">Stalled Video Detection</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Check every eligible stream and mark it Dead when no video can be decoded or decoded frames stop for 12 seconds. Runs inside the basis FFmpeg process, uses the configured hardware acceleration, and requires a 40-second minimum duration.
+                        </p>
+                      </div>
+                      <Switch
+                        id="stalled_video_check_enabled"
+                        checked={editedConfig?.stream_analysis?.stalled_video_check_enabled === true}
+                        onCheckedChange={(checked) => {
+                          updateConfigValue('stream_analysis.stalled_video_check_enabled', checked)
+                          if (checked) {
+                            const duration = Number(editedConfig?.stream_analysis?.ffmpeg_duration) || 40
+                            updateConfigValue('stream_analysis.ffmpeg_duration', Math.max(40, duration))
+                          }
+                        }}
                         disabled={!configEditing}
                       />
                     </div>

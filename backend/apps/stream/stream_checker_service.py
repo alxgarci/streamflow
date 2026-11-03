@@ -48,7 +48,10 @@ from apps.udi import get_udi_manager
 
 # Import dead streams tracker
 from apps.stream.dead_streams_tracker import DeadStreamsTracker
-from apps.stream.stream_check_utils import analyze_stream, _stream_analysis_timeout
+from apps.stream.stream_check_utils import (
+    analyze_stream,
+    _stream_analysis_timeout,
+)
 from apps.stream.queue_start import order_channels_for_queue_start
 from apps.stream.connectivity_guard import ConnectivityCheckResult, StreamConnectivityGuard
 from apps.stream.stream_session_manager import get_session_manager
@@ -174,7 +177,16 @@ class StreamCheckerService(CheckerOperationsMixin):
 
     @property
     def _checker_analyze_stream(self):
-        return analyze_stream
+        return self._analyze_stream_with_stalled_video_check
+
+    def _analyze_stream_with_stalled_video_check(self, *args, **kwargs):
+        """Inject the global stalled-video setting into the shared FFmpeg analysis."""
+        skip_stalled_video_probe = kwargs.pop('_skip_stalled_video_probe', False)
+        kwargs['stalled_video_check_enabled'] = bool(
+            not skip_stalled_video_probe
+            and self.config.get('stream_analysis.stalled_video_check_enabled', False)
+        )
+        return analyze_stream(*args, **kwargs)
 
     @property
     def _checker_wait_for_udi_stream_count_stabilise(self):
@@ -806,6 +818,27 @@ class StreamCheckerService(CheckerOperationsMixin):
 
     def update_config(self, updates: Dict):
         """Update service configuration and apply changes immediately."""
+        stream_analysis_updates = updates.get('stream_analysis')
+        if isinstance(stream_analysis_updates, dict):
+            stalled_check_enabled = stream_analysis_updates.get(
+                'stalled_video_check_enabled',
+                self.config.get('stream_analysis.stalled_video_check_enabled', False),
+            )
+            if stalled_check_enabled is True:
+                try:
+                    ffmpeg_duration = int(stream_analysis_updates.get(
+                        'ffmpeg_duration',
+                        self.config.get('stream_analysis.ffmpeg_duration', 30),
+                    ))
+                except (TypeError, ValueError):
+                    ffmpeg_duration = 0
+                if ffmpeg_duration < 40:
+                    stream_analysis_updates['ffmpeg_duration'] = 40
+                    logger.info(
+                        "Stalled-video detection requires at least 40 seconds; "
+                        "raising FFmpeg Duration to 40 seconds"
+                    )
+
         # Sanitize user_agent if present
         if 'stream_analysis' in updates and 'user_agent' in updates['stream_analysis']:
             user_agent = updates['stream_analysis']['user_agent']

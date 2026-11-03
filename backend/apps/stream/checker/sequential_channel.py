@@ -358,7 +358,26 @@ class CheckerSequentialChannelMixin:
 
             # Identify which streams need analysis (new or unchecked)
 
-            if target_stream_ids is not None:
+            stalled_video_check_enabled = (
+                self.config.get('stream_analysis.stalled_video_check_enabled', False)
+                and run_mode != 'teamarr_preflight'
+            )
+
+            if stalled_video_check_enabled:
+                # This global detector must see every eligible channel stream;
+                # the normal two-hour stream-check cache would hide a stalled
+                # source until its immunity period expired.
+                streams_to_check = [
+                    s for s in streams
+                    if s.get('id') not in protected_active_stream_ids
+                ]
+                streams_already_checked = []
+                logger.info(
+                    "Stalled-video detection enabled: checking all %s eligible streams in %s",
+                    len(streams_to_check),
+                    channel_name,
+                )
+            elif target_stream_ids is not None:
                 # Targeted check mode: Evaluates newly assigned streams ONLY
                 streams_to_check = [
                     s for s in streams
@@ -551,6 +570,7 @@ class CheckerSequentialChannelMixin:
                         freeze_check_enabled=False,
                         hardware_acceleration=analysis_params.get('hardware_acceleration'),
                         defer_missing_bitrate_retry=False,
+                        _skip_stalled_video_probe=True,
                     )
 
                 def sequential_recheck_started(initial, recheck_index, recheck_total):

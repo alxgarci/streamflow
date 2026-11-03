@@ -50,6 +50,7 @@ class StreamCheckConfig:
             'retries': 1,               # retry attempts
             'retry_delay': 10,          # seconds between retries
             'bitrate_recheck_enabled': True,  # serially recheck missing bitrate after initial probes
+            'stalled_video_check_enabled': False,  # independently detect streams that stop decoding video
             'max_loop_duration': 120,   # maximum loop period to detect (seconds); probe runs for 3× this value
             'blank_check_min_duration': 2.0,  # seconds of continuous black before blackdetect logs a segment
             'blank_check_pixel_threshold': 0.10,  # blackdetect pix_th threshold
@@ -164,23 +165,31 @@ class StreamCheckConfig:
             config: Dict[str, Any],
             loaded_config: Dict[str, Any],
         ) -> bool:
+            migrated = False
             loaded_guard = loaded_config.get('connectivity_guard')
-            if not isinstance(loaded_guard, dict):
-                return False
+            if isinstance(loaded_guard, dict):
+                loaded_wait = loaded_guard.get('recovery_wait_seconds')
+                try:
+                    loaded_wait_seconds = float(loaded_wait)
+                except (TypeError, ValueError):
+                    loaded_wait_seconds = None
 
-            loaded_wait = loaded_guard.get('recovery_wait_seconds')
+                if loaded_wait_seconds == self.LEGACY_RECOVERY_WAIT_SECONDS:
+                    config.setdefault('connectivity_guard', {})['recovery_wait_seconds'] = (
+                        self.DEFAULT_RECOVERY_WAIT_SECONDS
+                    )
+                    migrated = True
+
+            stream_analysis = config.get('stream_analysis', {})
             try:
-                loaded_wait_seconds = float(loaded_wait)
+                configured_duration = int(stream_analysis.get('ffmpeg_duration', 0))
             except (TypeError, ValueError):
-                return False
+                configured_duration = 0
+            if stream_analysis.get('stalled_video_check_enabled') is True and configured_duration < 40:
+                stream_analysis['ffmpeg_duration'] = 40
+                migrated = True
 
-            if loaded_wait_seconds != self.LEGACY_RECOVERY_WAIT_SECONDS:
-                return False
-
-            config.setdefault('connectivity_guard', {})['recovery_wait_seconds'] = (
-                self.DEFAULT_RECOVERY_WAIT_SECONDS
-            )
-            return True
+            return migrated
 
         if self.config_file is not None:
             try:

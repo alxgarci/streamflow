@@ -4,7 +4,11 @@ import logging
 from typing import Any, Dict, List, Optional, Set, Tuple
 from apps.core.log_sanitizer import audit_ref as _audit_ref
 from apps.automation.automation_config_manager import get_automation_config_manager
-from apps.core.stream_stats_utils import calculate_channel_averages, is_stream_dead as utils_is_stream_dead
+from apps.core.stream_stats_utils import (
+    DeadStreamResult,
+    calculate_channel_averages,
+    is_stream_dead as utils_is_stream_dead,
+)
 
 logger = logging.getLogger("apps.stream.stream_checker_service")
 
@@ -77,6 +81,29 @@ class CheckerClassificationMixin:
             Tuple of (is_dead: bool, reason: str).
             reason values: 'offline', 'low_quality', 'unstable', 'none'.
         """
+        if (
+            stream_data.get('stalled_video_detected')
+            and self.config.get('stream_analysis.stalled_video_check_enabled', False)
+        ):
+            try:
+                frames = int(stream_data.get('stalled_video_frames') or 0)
+            except (TypeError, ValueError):
+                frames = 0
+            try:
+                elapsed = float(stream_data.get('stalled_video_elapsed_seconds') or 0.0)
+            except (TypeError, ValueError):
+                elapsed = 0.0
+            return DeadStreamResult(
+                True,
+                'offline',
+                'stalled_video',
+                {
+                    'detection_reason': stream_data.get('stalled_video_reason') or 'decoded_video_stalled',
+                    'decoded_frames_before_stall': frames,
+                    'probe_elapsed_seconds': elapsed,
+                },
+            )
+
         # Default configuration
         dead_stream_config = self.config.get('dead_stream_handling', {})
         profile_config = {}

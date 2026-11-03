@@ -52,6 +52,11 @@ class StreamStatsWriterMixin:
             "bitrate_recheck_required": bool(stream_data.get("bitrate_recheck_required")),
             "bitrate_recheck_attempted": bool(stream_data.get("bitrate_recheck_attempted")),
             "bitrate_recheck_outcome": stream_data.get("bitrate_recheck_outcome") or "not_needed",
+            "stalled_video_probe_ran": True if stream_data.get("stalled_video_probe_ran") else (False if "stalled_video_probe_ran" in stream_data else None),
+            "stalled_video_detected": stream_data.get("stalled_video_detected") if stream_data.get("stalled_video_probe_ran") else (False if "stalled_video_detected" in stream_data else None),
+            "stalled_video_reason": stream_data.get("stalled_video_reason") if stream_data.get("stalled_video_probe_ran") else None,
+            "stalled_video_frames": stream_data.get("stalled_video_frames") if stream_data.get("stalled_video_probe_ran") else None,
+            "stalled_video_elapsed_seconds": stream_data.get("stalled_video_elapsed_seconds") if stream_data.get("stalled_video_probe_ran") else None,
             "visual_probe_ran": True if stream_data.get("visual_probe_ran") else (False if "visual_probe_ran" in stream_data else None),
             "visual_probe_completed": stream_data.get("visual_probe_completed") if "visual_probe_completed" in stream_data else None,
             "visual_probe_incomplete": stream_data.get("visual_probe_incomplete") if "visual_probe_incomplete" in stream_data else None,
@@ -107,6 +112,8 @@ class StreamStatsWriterMixin:
             "measurement_incomplete",
             "bitrate_recheck_required",
             "bitrate_recheck_attempted",
+            "stalled_video_probe_ran",
+            "stalled_video_detected",
         }
         PRESERVE_NULL = set()
         if not preserve_existing_bitrate:
@@ -174,6 +181,11 @@ class StreamStatsWriterMixin:
             "bitrate_recheck_required": bool(stream_data.get("bitrate_recheck_required")),
             "bitrate_recheck_attempted": bool(stream_data.get("bitrate_recheck_attempted")),
             "bitrate_recheck_outcome": stream_data.get("bitrate_recheck_outcome") or "not_needed",
+            "stalled_video_probe_ran": True if stream_data.get("stalled_video_probe_ran") else False,
+            "stalled_video_detected": stream_data.get("stalled_video_detected") if stream_data.get("stalled_video_probe_ran") else False,
+            "stalled_video_reason": stream_data.get("stalled_video_reason") if stream_data.get("stalled_video_probe_ran") else None,
+            "stalled_video_frames": stream_data.get("stalled_video_frames") if stream_data.get("stalled_video_probe_ran") else None,
+            "stalled_video_elapsed_seconds": stream_data.get("stalled_video_elapsed_seconds") if stream_data.get("stalled_video_probe_ran") else None,
             "visual_probe_ran": True if stream_data.get("visual_probe_ran") else False,
             "visual_probe_completed": stream_data.get("visual_probe_completed") if "visual_probe_completed" in stream_data else False,
             "visual_probe_incomplete": stream_data.get("visual_probe_incomplete") if "visual_probe_incomplete" in stream_data else False,
@@ -229,6 +241,8 @@ class StreamStatsWriterMixin:
             "measurement_incomplete",
             "bitrate_recheck_required",
             "bitrate_recheck_attempted",
+            "stalled_video_probe_ran",
+            "stalled_video_detected",
         }
         QUALITY_FIELDS = {
             "quality_reason",
